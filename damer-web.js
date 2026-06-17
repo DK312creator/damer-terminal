@@ -1,79 +1,105 @@
 const http = require('http');
+const https = require('https');
+
 const PORT = process.env.PORT || 3001;
+const MAIN = 'ddkbank.onrender.com';
+const KEY = 'damersecret123';
 
-const page = `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Терминал Дамера</title>
-<style>
-body { background:#0a0a0a; color:#ffd700; font-family:monospace; padding:20px; }
-h1 { text-align:center; }
-.req { background:#1a1a1a; padding:15px; margin:10px 0; border-radius:10px; border-left:4px solid #ffd700; }
-button { margin:5px; padding:8px 16px; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
-.done { background:#2ecc71; color:white; }
-.refund { background:#e74c3c; color:white; }
-</style>
-</head>
-<body>
-<h1>💎 Терминал Дамера</h1>
-<div id="status">👁 Ожидание...</div>
-<div id="list"></div>
-<script>
-var S = "https://ddkbank.onrender.com";
-var K = "damersecret123";
-async function load() {
-  try {
-    var r = await fetch(S + "/damer-queue-data?key=" + K);
-    var d = await r.json();
-    var div = document.getElementById("list");
-    if (d.success && d.requests.length) {
-      var h = "";
-      for (var i = 0; i < d.requests.length; i++) {
-        var x = d.requests[i];
-        h += "<div class=req>";
-        h += "<p>👤 <b>" + x.from + "</b></p>";
-        h += "<p>📋 " + x.type + ": " + x.number + "</p>";
-        h += "<p>💰 ♎" + x.amount + "</p>";
-        h += "<button class=done onclick='done(\"" + x.from + "\")'>✅ Выполнено</button> ";
-        h += "<button class=refund onclick='refund(\"" + x.from + "\"," + x.amount + ")'>❌ Возврат</button>";
-        h += "</div>";
-      }
-      div.innerHTML = h;
-    } else {
-      div.innerHTML = "<p style=text-align:center;color:#888>📭 Нет заявок</p>";
+function fetchQueue(callback) {
+    const options = {
+        hostname: MAIN,
+        path: '/damer-queue-data?key=' + KEY,
+        method: 'GET'
+    };
+    https.get(options, function(res) {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+            try {
+                callback(JSON.parse(data));
+            } catch(e) {
+                callback({ success: false });
+            }
+        });
+    });
+}
+
+function sendCommand(cmd, nick, amount, callback) {
+    const body = JSON.stringify({ nick: nick, amount: amount, key: KEY });
+    const options = {
+        hostname: MAIN,
+        path: cmd,
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': body.length
+        }
+    };
+    const req = https.request(options, function(res) {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => callback(JSON.parse(data)));
+    });
+    req.write(body);
+    req.end();
+}
+
+const server = http.createServer(function(req, res) {
+    const url = req.url;
+    
+    if (url === '/') {
+        fetchQueue(function(data) {
+            let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Терминал Дамера</title>';
+            html += '<style>body{background:#0a0a0a;color:#ffd700;font-family:monospace;padding:20px;text-align:center}';
+            html += '.req{background:#1a1a1a;padding:15px;margin:10px auto;border-radius:10px;border-left:4px solid #ffd700;max-width:500px;text-align:left}';
+            html += 'a{color:#ffd700;text-decoration:none;margin:5px;display:inline-block;padding:8px 16px;border-radius:5px}';
+            html += '.done{background:#2ecc71;color:white}.refund{background:#e74c3c;color:white}</style>';
+            html += '<meta http-equiv="refresh" content="5"></head><body>';
+            html += '<h1>💎 Терминал Дамера</h1>';
+            
+            if (data.success && data.requests && data.requests.length > 0) {
+                for (var i = 0; i < data.requests.length; i++) {
+                    var x = data.requests[i];
+                    html += '<div class="req">';
+                    html += '<p>👤 <b>' + x.from + '</b></p>';
+                    html += '<p>📋 ' + x.type + ': ' + x.number + '</p>';
+                    html += '<p>💰 ♎' + x.amount + '</p>';
+                    html += '<a class="done" href="/done?nick=' + x.from + '">✅ Выполнено</a> ';
+                    html += '<a class="refund" href="/refund?nick=' + x.from + '&amount=' + x.amount + '">❌ Возврат</a>';
+                    html += '</div>';
+                }
+            } else {
+                html += '<p style="color:#888">📭 Нет заявок</p>';
+            }
+            
+            html += '</body></html>';
+            res.writeHead(200, {'Content-Type': 'text/html;charset=utf-8'});
+            res.end(html);
+        });
     }
-  } catch(e) {}
-}
-async function done(n) {
-  await fetch(S + "/damer-done", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({nick: n, key: K})
-  });
-  document.getElementById("status").innerHTML = "✅ " + n + " выполнено!";
-  load();
-}
-async function refund(n, a) {
-  await fetch(S + "/damer-refund", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({nick: n, amount: a, key: K})
-  });
-  document.getElementById("status").innerHTML = "🔙 Возврат " + n + " | ♎" + a;
-  load();
-}
-setInterval(load, 3000);
-load();
-</script>
-</body>
-</html>
-`;
+    else if (url.startsWith('/done')) {
+        const params = new URLSearchParams(url.split('?')[1]);
+        const nick = params.get('nick');
+        sendCommand('/damer-done', nick, 0, function() {
+            res.writeHead(302, {'Location': '/'});
+            res.end();
+        });
+    }
+    else if (url.startsWith('/refund')) {
+        const params = new URLSearchParams(url.split('?')[1]);
+        const nick = params.get('nick');
+        const amount = params.get('amount');
+        sendCommand('/damer-refund', nick, parseInt(amount), function() {
+            res.writeHead(302, {'Location': '/'});
+            res.end();
+        });
+    }
+    else {
+        res.writeHead(404);
+        res.end('Not found');
+    }
+});
 
-http.createServer(function(req, res) {
-    res.writeHead(200, {"Content-Type": "text/html; charset=utf-8"});
-    res.end(page);
-}).listen(PORT, function() {
-    console.log("💎 Дамер-терминал на порту " + PORT);
+server.listen(PORT, function() {
+    console.log('💎 Дамер-терминал на порту ' + PORT);
 });
